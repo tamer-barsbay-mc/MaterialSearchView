@@ -980,7 +980,7 @@ class MaterialSearchView @JvmOverloads constructor(
     private val appCompatActionBarHeight: Int
         get() {
             val tv = TypedValue()
-            context.theme.resolveAttribute(R.attr.actionBarSize, tv, true)
+            context.theme.resolveAttribute(android.R.attr.actionBarSize, tv, true)
             return resources.getDimensionPixelSize(tv.resourceId)
         }
     //endregion

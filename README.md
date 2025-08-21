@@ -183,7 +183,7 @@ You can change how your MaterialSearchView looks like. To achieve that effect, t
             <item name="historyIcon">@drawable/ic_history_white</item>
             <item name="suggestionIcon">@drawable/ic_action_search_white</item>
             <item name="listTextColor">@color/white_ish</item>
-            <item name="searchBarHeight">?attr/actionBarSize</item>
+            <item name="searchBarHeight">?android:attr/actionBarSize</item>
             <item name="voiceHintPrompt">@string/hint_prompt</item>
             <item name="android:textColor">@color/black</item>
             <item name="android:textColorHint">@color/gray_50</item>
