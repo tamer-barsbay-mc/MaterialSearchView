@@ -391,6 +391,18 @@ class MaterialSearchView @JvmOverloads constructor(
                     R.drawable.ic_action_navigation_arrow_back)
             )
         }
+        if (typedArray.hasValue(R.styleable.MaterialSearchView_searchBackIconBackground)) {
+            setBackIconBackground(typedArray.getResourceId(
+                R.styleable.MaterialSearchView_searchBackIconBackground,
+                android.R.attr.selectableItemBackground
+            ))
+        }
+        if (typedArray.hasValue(R.styleable.MaterialSearchView_searchCloseIconBackground)) {
+            setCloseIconBackground(typedArray.getResourceId(
+                R.styleable.MaterialSearchView_searchCloseIconBackground,
+                android.R.attr.selectableItemBackground
+            ))
+        }
         if (typedArray.hasValue(R.styleable.MaterialSearchView_searchSuggestionBackground)) {
             setSuggestionBackground(typedArray.getResourceId(
                     R.styleable.MaterialSearchView_searchSuggestionBackground,
@@ -871,6 +883,14 @@ class MaterialSearchView @JvmOverloads constructor(
      */
     fun setBackIcon(resourceId: Int) {
         mBack.setImageResource(resourceId)
+    }
+
+    fun setBackIconBackground(resourceId: Int) {
+        mBack.setBackgroundResource(resourceId)
+    }
+
+    fun setCloseIconBackground(resourceId: Int) {
+        mClear.setBackgroundResource(resourceId)
     }
 
     /**
