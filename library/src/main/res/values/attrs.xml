@@ -4,7 +4,9 @@
         <attr name="searchBackground" format="integer" />
         <attr name="searchVoiceIcon" format="integer" />
         <attr name="searchCloseIcon" format="integer" />
+        <attr name="searchCloseIconBackground" format="integer" />
         <attr name="searchBackIcon" format="integer" />
+        <attr name="searchBackIconBackground" format="integer" />
         <attr name="searchSuggestionBackground" format="integer" />
         <attr name="historyIcon" format="integer" />
         <attr name="suggestionIcon" format="integer" />

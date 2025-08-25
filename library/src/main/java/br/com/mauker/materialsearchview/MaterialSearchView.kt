@@ -3,11 +3,9 @@ package br.com.mauker.materialsearchview
 import android.animation.Animator
 import android.animation.AnimatorListenerAdapter
 import android.app.Activity
-import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
-import android.database.Cursor
 import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.drawable.ColorDrawable
@@ -24,18 +22,26 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.View.OnFocusChangeListener
 import android.view.inputmethod.InputMethodManager
-import android.widget.*
-import android.widget.AdapterView.OnItemClickListener
-import android.widget.AdapterView.OnItemLongClickListener
+import android.widget.EditText
+import android.widget.FrameLayout
+import android.widget.ImageButton
+import android.widget.LinearLayout
 import androidx.annotation.DrawableRes
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.content.ContextCompat
-import br.com.mauker.materialsearchview.adapters.CursorSearchAdapter
-import br.com.mauker.materialsearchview.db.HistoryContract
+import androidx.recyclerview.widget.RecyclerView
+import br.com.mauker.materialsearchview.adapters.SearchAdapter
+import br.com.mauker.materialsearchview.db.DaoProvider
+import br.com.mauker.materialsearchview.db.DbHelper
+import br.com.mauker.materialsearchview.db.model.History
+import br.com.mauker.materialsearchview.sealedClasses.Message
 import br.com.mauker.materialsearchview.utils.AnimationUtils.circleHideView
 import br.com.mauker.materialsearchview.utils.AnimationUtils.circleRevealView
 import br.com.mauker.materialsearchview.utils.AnimationUtils.fadeInView
 import br.com.mauker.materialsearchview.utils.AnimationUtils.fadeOutView
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.SendChannel
+import kotlinx.coroutines.channels.actor
 import java.util.*
 import kotlin.math.roundToInt
 
@@ -48,17 +54,13 @@ class MaterialSearchView @JvmOverloads constructor(
         private val mContext: Context, attributeSet: AttributeSet? = null, defStyleAttributes: Int = 0
 ) : FrameLayout(mContext, attributeSet) {
 
+    //region Properties
     companion object {
-        //region Properties
-        /**
-         * The freaking log tag. Used for logs, duh.
-         */
-        private val LOG_TAG = MaterialSearchView::class.java.simpleName
 
         /**
          * The maximum number of results we want to return from the voice recognition.
          */
-        private const val MAX_RESULTS = 1
+        private const val MAX_VOICE_RESULTS = 1
 
         /**
          * The identifier for the voice request intent. (Guess why it's 42).
@@ -70,7 +72,9 @@ class MaterialSearchView @JvmOverloads constructor(
          */
         private var MAX_HISTORY = BuildConfig.MAX_HISTORY
 
-        private val EMPTY_STRING = ""
+        private var MAX_PINNED = BuildConfig.MAX_PINNED
+
+        private const val EMPTY_STRING = ""
 
         /**
          * Sets how many items you want to show from the history database.
@@ -80,10 +84,33 @@ class MaterialSearchView @JvmOverloads constructor(
         fun setMaxHistoryResults(maxHistory: Int) {
             MAX_HISTORY = maxHistory
         }
+
+        /**
+         * Sets how many pinned items you want to show from the history database.
+         *
+         * @param maxPinned - The number of pinned items you want to display.
+         */
+        fun setMaxPinnedResults(maxPinned: Int) {
+            MAX_PINNED = maxPinned
+        }
     }
 
     //endregion
-    //region Constructors
+
+    //region Database
+
+    private val daoProvider: DaoProvider = DbHelper(context)
+    private val dataAccessor = MsvDataAccessor(daoProvider)
+
+    private var parentJob: Job = Job()
+
+    private var parentScope = CoroutineScope(parentJob)
+
+    // TODO - Check if this buffer uses too much memory
+    private var actor = createActor()
+
+    //endregion
+
     init {
         // Initialize view
         init()
@@ -92,6 +119,68 @@ class MaterialSearchView @JvmOverloads constructor(
         initStyle(attributeSet, defStyleAttributes)
     }
 
+    @OptIn(ObsoleteCoroutinesApi::class)
+    private fun createActor(): SendChannel<Message> {
+        return parentScope.actor(capacity = 10, context = Dispatchers.IO) {
+            for (msg in channel) {
+                println("Inside actor loop")
+                when (msg) {
+                    is Message.SaveQuery -> {
+                        println("Inside actor save query")
+                        dataAccessor.saveQuery(msg.query)
+                    }
+                    is Message.AddSuggestion -> {
+                        dataAccessor.addSuggestion(msg.suggestion)
+                    }
+                    is Message.AddPin -> {
+                        println("Inside actor add pin")
+                        dataAccessor.addPin(msg.pin)
+                    }
+                    is Message.AddSuggestions -> {
+                        println("Inside actor add suggestions")
+                        dataAccessor.addSuggestions(msg.suggestions)
+                    }
+                    is Message.AddPinnedItems -> {
+                        dataAccessor.addPinnedItems(msg.pinnedItems)
+                    }
+                    is Message.RemoveItem -> {
+                        dataAccessor.removeHistoryItem(msg.item)
+                    }
+                    Message.ClearSuggestions -> {
+                        dataAccessor.clearSuggestions()
+                    }
+                    Message.ClearHistory -> {
+                        dataAccessor.clearSearchHistory()
+                    }
+                    Message.ClearPinned -> {
+                        dataAccessor.clearPinned()
+                    }
+                    Message.ClearAll -> {
+                        println("Inside actor clear all")
+                        dataAccessor.clearAll()
+                    }
+                    is Message.GetDefaultList -> {
+                        val list = dataAccessor.getDefaultList(msg.maxHistory, msg.maxPinned)
+                        withContext(Dispatchers.Main) {
+                            adapter.updateAdapter(list)
+                        }
+                    }
+                    is Message.GetFilteredList -> {
+                        val filtered = dataAccessor.getFilteredList(
+                                msg.filter,
+                                msg.maxHistory,
+                                msg.maxPinned
+                        )
+                        withContext(Dispatchers.Main) {
+                            adapter.updateAdapter(filtered)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    //region Control variables
     /**
      * Determines if the search view is opened or closed.
      * @return True if the search view is open, false if it is closed.
@@ -108,7 +197,7 @@ class MaterialSearchView @JvmOverloads constructor(
     private var mShouldAnimate = true
 
     /**
-     * Whether or not the MaterialSearchView will clonse under a click on the Tint View (Blank Area).
+     * Whether or not the MaterialSearchView will close under a click on the Tint View (Blank Area).
      */
     private var mShouldCloseOnTintClick = false
 
@@ -172,12 +261,12 @@ class MaterialSearchView @JvmOverloads constructor(
     /**
      * The ListView for displaying suggestions based on the search.
      */
-    private lateinit var mSuggestionsListView: ListView
+    private lateinit var mSuggestionsRecyclerView: RecyclerView
 
     /**
      * Adapter for displaying suggestions.
      */
-    lateinit var adapter: CursorAdapter
+    lateinit var adapter: SearchAdapter
         private set
     //endregion
 
@@ -231,7 +320,7 @@ class MaterialSearchView @JvmOverloads constructor(
         mSearchEditText = mRoot.findViewById(R.id.et_search)
         mVoice = mRoot.findViewById(R.id.action_voice)
         mClear = mRoot.findViewById(R.id.action_clear)
-        mSuggestionsListView = mRoot.findViewById(R.id.suggestion_list)
+        mSuggestionsRecyclerView = mRoot.findViewById(R.id.suggestion_list)
 
         // Set click listeners
         mBack.setOnClickListener { closeSearch() }
@@ -245,28 +334,20 @@ class MaterialSearchView @JvmOverloads constructor(
 
         // Initialize the search view.
         initSearchView()
-        adapter = CursorSearchAdapter(mContext, historyCursor, 0)
 
-        adapter.setFilterQueryProvider(FilterQueryProvider { constraint ->
-            val filter = constraint.toString()
-            if (filter.isEmpty()) {
-                historyCursor
-            } else {
-                mContext.contentResolver.query(
-                        HistoryContract.HistoryEntry.CONTENT_URI,
-                        null,
-                        HistoryContract.HistoryEntry.COLUMN_QUERY + " LIKE ?", arrayOf("%$filter%"),
-                        HistoryContract.HistoryEntry.COLUMN_IS_HISTORY + " DESC, " +
-                                HistoryContract.HistoryEntry.COLUMN_QUERY
-                )
+        val listener = object: OnHistoryItemClickListener {
+            override fun onClick(history: History) {
+                setQuery(query = history.query, shouldSubmit = true)
             }
-        })
-        mSuggestionsListView.adapter = adapter
-        mSuggestionsListView.isTextFilterEnabled = true
-        mSuggestionsListView.onItemClickListener = OnItemClickListener { _, _, position, _ ->
-            val suggestion = getSuggestionAtPosition(position)
-            setQuery(suggestion, true)
+
+            override fun onLongClick(history: History) { }
         }
+
+        adapter = SearchAdapter(mutableListOf(), listener)
+
+        mSuggestionsRecyclerView.adapter = adapter
+
+        resetAdapterToInitialState()
     }
 
     /**
@@ -279,7 +360,7 @@ class MaterialSearchView @JvmOverloads constructor(
         val typedArray = mContext.obtainStyledAttributes(attributeSet, R.styleable.MaterialSearchView, defStyleAttribute, 0)
 
         if (typedArray.hasValue(R.styleable.MaterialSearchView_searchBackground)) {
-            background = typedArray.getDrawable(R.styleable.MaterialSearchView_searchBackground)!!
+            background = typedArray.getDrawable(R.styleable.MaterialSearchView_searchBackground)
         }
         if (typedArray.hasValue(R.styleable.MaterialSearchView_android_textColor)) {
             setTextColor(typedArray.getColor(R.styleable.MaterialSearchView_android_textColor,
@@ -310,24 +391,36 @@ class MaterialSearchView @JvmOverloads constructor(
                     R.drawable.ic_action_navigation_arrow_back)
             )
         }
+        if (typedArray.hasValue(R.styleable.MaterialSearchView_searchBackIconBackground)) {
+            setBackIconBackground(typedArray.getResourceId(
+                R.styleable.MaterialSearchView_searchBackIconBackground,
+                android.R.attr.selectableItemBackground
+            ))
+        }
+        if (typedArray.hasValue(R.styleable.MaterialSearchView_searchCloseIconBackground)) {
+            setCloseIconBackground(typedArray.getResourceId(
+                R.styleable.MaterialSearchView_searchCloseIconBackground,
+                android.R.attr.selectableItemBackground
+            ))
+        }
         if (typedArray.hasValue(R.styleable.MaterialSearchView_searchSuggestionBackground)) {
             setSuggestionBackground(typedArray.getResourceId(
                     R.styleable.MaterialSearchView_searchSuggestionBackground,
                     R.color.search_layover_bg)
             )
         }
-        if (typedArray.hasValue(R.styleable.MaterialSearchView_historyIcon) && adapter is CursorSearchAdapter) {
-            (adapter as CursorSearchAdapter).historyIcon = typedArray.getResourceId(
+        if (typedArray.hasValue(R.styleable.MaterialSearchView_historyIcon)) {
+            adapter.historyIcon = typedArray.getResourceId(
                     R.styleable.MaterialSearchView_historyIcon,
                     R.drawable.ic_history_white)
         }
-        if (typedArray.hasValue(R.styleable.MaterialSearchView_suggestionIcon) && adapter is CursorSearchAdapter) {
-            (adapter as CursorSearchAdapter).suggestionIcon = typedArray.getResourceId(
+        if (typedArray.hasValue(R.styleable.MaterialSearchView_suggestionIcon)) {
+            adapter.suggestionIcon = typedArray.getResourceId(
                     R.styleable.MaterialSearchView_suggestionIcon,
                     R.drawable.ic_action_search_white)
         }
-        if (typedArray.hasValue(R.styleable.MaterialSearchView_listTextColor) && adapter is CursorSearchAdapter) {
-            (adapter as CursorSearchAdapter).textColor = typedArray.getColor(R.styleable.MaterialSearchView_listTextColor,
+        if (typedArray.hasValue(R.styleable.MaterialSearchView_listTextColor)) {
+            adapter.textColor = typedArray.getColor(R.styleable.MaterialSearchView_listTextColor,
                     ContextCompat.getColor(mContext, R.color.white))
         }
         if (typedArray.hasValue(R.styleable.MaterialSearchView_android_inputType)) {
@@ -360,7 +453,7 @@ class MaterialSearchView @JvmOverloads constructor(
      * Preforms necessary initializations on the SearchView.
      */
     private fun initSearchView() {
-        mSearchEditText.setOnEditorActionListener { v, actionId, event -> // When an edit occurs, submit the query.
+        mSearchEditText.setOnEditorActionListener { _, _, _ -> // When an edit occurs, submit the query.
             onSubmitQuery()
             true
         }
@@ -368,14 +461,13 @@ class MaterialSearchView @JvmOverloads constructor(
             override fun beforeTextChanged(s: CharSequence, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence, start: Int, before: Int, count: Int) {
                 // When the text changes, filter
-                adapter.filter.filter(s.toString())
-                adapter.notifyDataSetChanged()
+                doFiltering(s.toString())
                 this@MaterialSearchView.onTextChanged(s)
             }
 
             override fun afterTextChanged(s: Editable) {}
         })
-        mSearchEditText.onFocusChangeListener = OnFocusChangeListener { v, hasFocus -> // If we gain focus, show keyboard and show suggestions.
+        mSearchEditText.onFocusChangeListener = OnFocusChangeListener { _, hasFocus -> // If we gain focus, show keyboard and show suggestions.
             if (hasFocus) {
                 showKeyboard(mSearchEditText)
                 showSuggestions()
@@ -383,6 +475,7 @@ class MaterialSearchView @JvmOverloads constructor(
         }
     }
     //endregion
+
     //region Show Methods
     /**
      * Displays the keyboard with a focus on the Search EditText.
@@ -410,10 +503,10 @@ class MaterialSearchView @JvmOverloads constructor(
      */
     private fun displayVoiceButton(display: Boolean) {
         // Only display voice if we pass in true, and it's available
-        if (display && isVoiceAvailable && isVoiceIconEnabled) {
-            mVoice.visibility = VISIBLE
+        mVoice.visibility = if (display && isVoiceAvailable && isVoiceIconEnabled) {
+            VISIBLE
         } else {
-            mVoice.visibility = GONE
+            GONE
         }
     }
 
@@ -429,7 +522,7 @@ class MaterialSearchView @JvmOverloads constructor(
      * Displays the available suggestions, if any.
      */
     private fun showSuggestions() {
-        mSuggestionsListView.visibility = VISIBLE
+        mSuggestionsRecyclerView.visibility = VISIBLE
     }
 
     /**
@@ -460,12 +553,13 @@ class MaterialSearchView @JvmOverloads constructor(
         isOpen = true
     }
     //endregion
+
     //region Hide Methods
     /**
      * Hides the suggestion list.
      */
     private fun dismissSuggestions() {
-        mSuggestionsListView.visibility = GONE
+        mSuggestionsRecyclerView.visibility = GONE
     }
 
     /**
@@ -482,7 +576,7 @@ class MaterialSearchView @JvmOverloads constructor(
      */
     fun closeSearch() {
         // If we're already closed, just return.
-        if (!isOpen) {
+        if (isOpen.not()) {
             return
         }
 
@@ -496,7 +590,7 @@ class MaterialSearchView @JvmOverloads constructor(
                 override fun onAnimationEnd(animation: Animator) {
                     super.onAnimationEnd(animation)
                     // After the animation is done. Hide the root view.
-                    v.visibility = GONE
+                    v.visibility = INVISIBLE
                 }
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -506,9 +600,8 @@ class MaterialSearchView @JvmOverloads constructor(
             }
         } else {
             // Just hide the view.
-            mRoot.visibility = GONE
+            mRoot.visibility = INVISIBLE
         }
-
 
         // Call listener if we have one
         mSearchViewListener?.onSearchViewClosed()
@@ -516,6 +609,7 @@ class MaterialSearchView @JvmOverloads constructor(
         isOpen = false
     }
     //endregion
+
     //region Interface Methods
     /**
      * Filters and updates the buttons when text is changed.
@@ -526,7 +620,7 @@ class MaterialSearchView @JvmOverloads constructor(
         mCurrentQuery = mSearchEditText.text
 
         // If the text is not empty, show the empty button and hide the voice button
-        if (!TextUtils.isEmpty(mCurrentQuery)) {
+        if (mCurrentQuery.isNotEmpty()) {
             displayVoiceButton(false)
             displayClearButton(true)
         } else {
@@ -554,12 +648,12 @@ class MaterialSearchView @JvmOverloads constructor(
             // TODO - Improve.
             if (mOnQueryTextListener?.onQueryTextSubmit(query.toString()) == false) {
                 if (mShouldKeepHistory) {
-                    saveQueryToDb(query.toString(), System.currentTimeMillis())
+                    saveQueryToDb(query.toString())
                 }
 
                 // Refresh the cursor on the adapter,
                 // so the new entry will be shown on the next time the user opens the search view.
-                refreshAdapterCursor()
+                resetAdapterToInitialState()
                 closeSearch()
                 mSearchEditText.setText(EMPTY_STRING)
             }
@@ -578,7 +672,7 @@ class MaterialSearchView @JvmOverloads constructor(
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
             intent.putExtra(RecognizerIntent.EXTRA_PROMPT, mHintPrompt)
             intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, MAX_RESULTS) // Quantity of results we want to receive
+            intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, MAX_VOICE_RESULTS) // Quantity of results we want to receive
             if (mContext is Activity) {
                 mContext.startActivityForResult(intent, REQUEST_VOICE)
             }
@@ -605,21 +699,13 @@ class MaterialSearchView @JvmOverloads constructor(
     }
 
     /**
-     * Sets an OnItemClickListener to the suggestion list.
+     * Sets an OnHistoryItemClickListener to the suggestion list. This listener can be used to
+     * handle onClick() and onLongClick() methods.
      *
-     * @param listener - The ItemClickListener.
+     * @param listener - The listener.
      */
-    fun setOnItemClickListener(listener: OnItemClickListener?) {
-        mSuggestionsListView.onItemClickListener = listener
-    }
-
-    /**
-     * Sets an OnItemLongClickListener to the suggestion list.
-     *
-     * @param listener - The ItemLongClickListener.
-     */
-    fun setOnItemLongClickListener(listener: OnItemLongClickListener?) {
-        mSuggestionsListView.onItemLongClickListener = listener
+    fun setOnItemClickListener(listener: OnHistoryItemClickListener?) {
+        adapter.listener = listener
     }
 
     /**
@@ -629,6 +715,14 @@ class MaterialSearchView @JvmOverloads constructor(
      */
     fun setCloseOnTintClick(shouldClose: Boolean) {
         mShouldCloseOnTintClick = shouldClose
+    }
+
+    fun setShouldShowTint(shouldShowTint: Boolean) {
+        mTintView.visibility = if (shouldShowTint) {
+            VISIBLE
+        } else {
+            GONE
+        }
     }
 
     /**
@@ -653,15 +747,14 @@ class MaterialSearchView @JvmOverloads constructor(
      * Set the query to search view. If submit is set to true, it'll submit the query.
      *
      * @param query - The Query value.
-     * @param submit - Whether to submit or not the query or not.
+     * @param shouldSubmit - Whether to submit or not the query or not.
      */
-    fun setQuery(query: CharSequence?, submit: Boolean) {
+    fun setQuery(query: CharSequence, shouldSubmit: Boolean) {
         mSearchEditText.setText(query)
-        if (query != null) {
-            mSearchEditText.setSelection(mSearchEditText.length())
-            mCurrentQuery = query
-        }
-        if (submit && !TextUtils.isEmpty(query)) {
+        mSearchEditText.setSelection(mSearchEditText.length())
+        mCurrentQuery = query
+
+        if (shouldSubmit && query.isNotEmpty()) {
             onSubmitQuery()
         }
     }
@@ -792,6 +885,14 @@ class MaterialSearchView @JvmOverloads constructor(
         mBack.setImageResource(resourceId)
     }
 
+    fun setBackIconBackground(resourceId: Int) {
+        mBack.setBackgroundResource(resourceId)
+    }
+
+    fun setCloseIconBackground(resourceId: Int) {
+        mClear.setBackgroundResource(resourceId)
+    }
+
     /**
      * Sets the background of the suggestions ListView.
      *
@@ -800,9 +901,12 @@ class MaterialSearchView @JvmOverloads constructor(
      */
     fun setSuggestionBackground(resource: Int) {
         if (resource > 0) {
-            mSuggestionsListView.setBackgroundResource(resource)
+            mSuggestionsRecyclerView.setBackgroundResource(resource)
         }
     }
+
+    // TODO - Set text size, icon size and other modifications. -
+    // TODO - See: https://github.com/Mauker1/MaterialSearchView/issues/157
 
     /**
      * Changes the default history list icon.
@@ -810,11 +914,7 @@ class MaterialSearchView @JvmOverloads constructor(
      * @param resourceId The resource id of the new history icon.
      */
     fun setHistoryIcon(@DrawableRes resourceId: Int) {
-        adapter.let {
-            if (it is CursorSearchAdapter) {
-                it.historyIcon = resourceId
-            }
-        }
+        adapter.historyIcon = resourceId
     }
 
     /**
@@ -823,11 +923,7 @@ class MaterialSearchView @JvmOverloads constructor(
      * @param resourceId The resource id of the new suggestion icon.
      */
     fun setSuggestionIcon(@DrawableRes resourceId: Int) {
-        adapter.let {
-            if (it is CursorSearchAdapter) {
-                it.suggestionIcon = resourceId
-            }
-        }
+        adapter.suggestionIcon = resourceId
     }
 
     /**
@@ -836,11 +932,7 @@ class MaterialSearchView @JvmOverloads constructor(
      * @param color The new color.
      */
     fun setListTextColor(color: Int) {
-        adapter.let {
-            if (it is CursorSearchAdapter) {
-                it.textColor = color
-            }
-        }
+        adapter.textColor = color
     }
 
     /**
@@ -893,7 +985,7 @@ class MaterialSearchView @JvmOverloads constructor(
     }
 
     fun setVoiceHintPrompt(hintPrompt: String) {
-        mHintPrompt = if (!TextUtils.isEmpty(hintPrompt)) {
+        mHintPrompt = if (hintPrompt.isNotBlank()) {
             hintPrompt
         } else {
             mContext.getString(R.string.hint_prompt)
@@ -908,7 +1000,7 @@ class MaterialSearchView @JvmOverloads constructor(
     private val appCompatActionBarHeight: Int
         get() {
             val tv = TypedValue()
-            context.theme.resolveAttribute(R.attr.actionBarSize, tv, true)
+            context.theme.resolveAttribute(android.R.attr.actionBarSize, tv, true)
             return resources.getDimensionPixelSize(tv.resourceId)
         }
     //endregion
@@ -919,9 +1011,9 @@ class MaterialSearchView @JvmOverloads constructor(
      * @return The current query, or an empty String if there's no query.
      */
     val currentQuery: String
-        get() = if (!TextUtils.isEmpty(mCurrentQuery)) {
+        get() = if (mCurrentQuery.isNotEmpty()) {
             mCurrentQuery.toString()
-        } else EMPTY_STRING// Get package manager
+        } else EMPTY_STRING // Get package manager
 
     // Gets a list of activities that can handle this intent.
 
@@ -948,10 +1040,10 @@ class MaterialSearchView @JvmOverloads constructor(
      */
     fun getSuggestionAtPosition(position: Int): String {
         // If position is out of range just return empty string.
-        return if (position < 0 || position >= adapter.count) {
+        return if (position < 0 || position >= adapter.itemCount) {
             EMPTY_STRING
         } else {
-            adapter.getItem(position).toString()
+            adapter.history[position].query
         }
     }
     //endregion
@@ -974,132 +1066,130 @@ class MaterialSearchView @JvmOverloads constructor(
     }
 
     //----- Lifecycle methods -----//
-    //    public void activityPaused() {
-    //        Cursor cursor = ((CursorAdapter)mAdapter).getCursor();
-    //        if (cursor != null && !cursor.isClosed()) {
-    //            cursor.close();
-    //        }
-    //    }
-    fun activityResumed() {
-        refreshAdapterCursor()
+
+    fun onViewStopped() {
+        parentJob.cancel()
+    }
+
+    fun onViewResumed() {
+        parentJob = Job()
+        parentScope = CoroutineScope(parentJob)
+        actor = createActor()
     }
     //endregion
 
     //region Database Methods
+
+    /**
+     * Resets the adapter to its initial state showing only history and pinned items.
+     */
+    private fun resetAdapterToInitialState() {
+        actor.trySend(Message.GetDefaultList(MAX_HISTORY, MAX_PINNED)).isSuccess
+//        CoroutineScope(IO).launch {
+//            val initialList = historyDAO.getDefaultHistoryWithPin(MAX_HISTORY, MAX_PINNED)
+//            withContext(MAIN) {
+//                adapter.updateAdapter(initialList.toMutableList())
+//            }
+//        }
+    }
+
+    private fun doFiltering(query: String) {
+        actor.trySend(Message.GetFilteredList(query, MAX_HISTORY, MAX_PINNED)).isSuccess
+//        CoroutineScope(IO).launch {
+//            val filtered =  if (query.isBlank()) {
+//                historyDAO.getDefaultHistoryWithPin(MAX_HISTORY, MAX_PINNED)
+//            } else {
+//                historyDAO.getFilteredHistory(query)
+//            }
+//
+//            withContext(MAIN) {
+//                adapter.updateAdapter(filtered.toMutableList())
+//            }
+//        }
+    }
+
     /**
      * Save a query to the local database.
      *
-     * @param query - The query to be saved. Can't be empty or null.
-     * @param ms - The insert date, in millis. As a suggestion, use System.currentTimeMillis();
+     * @param query - The query to be saved. Can't be empty.
      */
-    @Synchronized
-    fun saveQueryToDb(query: String?, ms: Long) {
-        if (!TextUtils.isEmpty(query) && ms > 0) {
-            val values = ContentValues()
-            values.put(HistoryContract.HistoryEntry.COLUMN_QUERY, query)
-            values.put(HistoryContract.HistoryEntry.COLUMN_INSERT_DATE, ms)
-            values.put(HistoryContract.HistoryEntry.COLUMN_IS_HISTORY, 1) // Saving as history.
-            mContext.contentResolver.insert(HistoryContract.HistoryEntry.CONTENT_URI, values)
+    fun saveQueryToDb(query: String) {
+        if (query.isBlank()) {
+            return
         }
+
+        actor.trySend(Message.SaveQuery(query)).isSuccess
+    }
+
+    fun addPin(pin: String) {
+        if (pin.isBlank()) {
+            return
+        }
+
+        actor.trySend(Message.AddPin(pin)).isSuccess
     }
 
     /**
      * Add a single suggestion item to the suggestion list.
      * @param suggestion - The suggestion to be inserted on the database.
      */
-    @Synchronized
-    fun addSuggestion(suggestion: String?) {
-        if (suggestion?.isNotEmpty() == true) {
-            val value = ContentValues()
-            value.put(HistoryContract.HistoryEntry.COLUMN_QUERY, suggestion)
-            value.put(HistoryContract.HistoryEntry.COLUMN_INSERT_DATE, System.currentTimeMillis())
-            value.put(HistoryContract.HistoryEntry.COLUMN_IS_HISTORY, 0) // Saving as suggestion.
-            mContext.contentResolver.insert(
-                    HistoryContract.HistoryEntry.CONTENT_URI,
-                    value
-            )
+    fun addSuggestion(suggestion: String) {
+        if (suggestion.isBlank()) {
+            return
         }
+
+        actor.trySend(Message.AddSuggestion(suggestion)).isSuccess
     }
 
     /**
-     * Removes a single suggestion from the list. <br></br>
-     * Disclaimer, this doesn't remove a single search history item, only suggestions.
-     * @param suggestion - The suggestion to be removed.
+     * Removes a single history item from the database.
+     * @param query - The text to be removed.
      */
-    @Synchronized
-    fun removeSuggestion(suggestion: String?) {
-        if (suggestion?.isNotEmpty() == true) {
-            mContext.contentResolver.delete(
-                    HistoryContract.HistoryEntry.CONTENT_URI,
-                    HistoryContract.HistoryEntry.TABLE_NAME +
-                            "." +
-                            HistoryContract.HistoryEntry.COLUMN_QUERY +
-                            " = ? AND " +
-                            HistoryContract.HistoryEntry.TABLE_NAME +
-                            "." +
-                            HistoryContract.HistoryEntry.COLUMN_IS_HISTORY +
-                            " = ?", arrayOf(suggestion, 0.toString()))
+    fun removeHistoryItem(query: String) {
+        if (query.isBlank()) {
+            return
         }
+
+        actor.trySend(Message.RemoveItem(query)).isSuccess
+    }
+
+    // Pinned items
+    fun addPinnedItems(pinnedItems: List<String>) {
+        actor.trySend(Message.AddPinnedItems(pinnedItems)).isSuccess
     }
 
     @Synchronized
-    fun addSuggestions(suggestions: List<String?>) {
-        val toSave = ArrayList<ContentValues>()
-        for (str in suggestions) {
-            val value = ContentValues()
-            value.put(HistoryContract.HistoryEntry.COLUMN_QUERY, str)
-            value.put(HistoryContract.HistoryEntry.COLUMN_INSERT_DATE, System.currentTimeMillis())
-            value.put(HistoryContract.HistoryEntry.COLUMN_IS_HISTORY, 0) // Saving as suggestion.
-            toSave.add(value)
-        }
-        val values = toSave.toTypedArray()
-        mContext.contentResolver.bulkInsert(
-                HistoryContract.HistoryEntry.CONTENT_URI,
-                values
-        )
+    fun addPinnedItems(pinnedItems: Array<String>) {
+        addPinnedItems(pinnedItems.toList())
     }
 
-    fun addSuggestions(suggestions: Array<String?>) {
-        val list = ArrayList(listOf(*suggestions))
-        addSuggestions(list)
+    // Suggestions
+    fun addSuggestions(suggestions: List<String>) {
+        actor.trySend(Message.AddSuggestions(suggestions)).isSuccess
     }
 
-    private val historyCursor: Cursor?
-        get() = mContext.contentResolver.query(
-                HistoryContract.HistoryEntry.CONTENT_URI,
-                null,
-                HistoryContract.HistoryEntry.COLUMN_IS_HISTORY + " = ?", arrayOf("1"),
-                HistoryContract.HistoryEntry.COLUMN_INSERT_DATE + " DESC LIMIT " + MAX_HISTORY
-        )
-
-    private fun refreshAdapterCursor() {
-        val historyCursor = historyCursor
-        adapter.changeCursor(historyCursor)
+    fun addSuggestions(suggestions: Array<String>) {
+        addSuggestions(suggestions.toList())
     }
 
-    @Synchronized
     fun clearSuggestions() {
-        mContext.contentResolver.delete(
-                HistoryContract.HistoryEntry.CONTENT_URI,
-                HistoryContract.HistoryEntry.COLUMN_IS_HISTORY + " = ?", arrayOf("0"))
+        // TODO - Check if it's needed to update the adapter
+        actor.trySend(Message.ClearSuggestions).isSuccess
     }
 
-    @Synchronized
     fun clearHistory() {
-        mContext.contentResolver.delete(
-                HistoryContract.HistoryEntry.CONTENT_URI,
-                HistoryContract.HistoryEntry.COLUMN_IS_HISTORY + " = ?", arrayOf("1"))
+        actor.trySend(Message.ClearHistory).isSuccess
     }
 
-    @Synchronized
+    fun clearPinned() {
+        actor.trySend(Message.ClearPinned).isSuccess
+    }
+
     fun clearAll() {
-        mContext.contentResolver.delete(
-                HistoryContract.HistoryEntry.CONTENT_URI,
-                null,
-                null
-        )
+        actor.trySend(Message.ClearAll).isSuccess
     }
     //endregion
+
     //region Interfaces
     /**
      * Interface that handles the submission and change of search queries.
@@ -1135,6 +1225,14 @@ class MaterialSearchView @JvmOverloads constructor(
          * Called when the search view closes.
          */
         fun onSearchViewClosed()
+    }
+
+    /**
+     * Interfaced used to handle clicks on individual items in the suggestion list
+     */
+    interface OnHistoryItemClickListener {
+        fun onClick(history: History)
+        fun onLongClick(history: History)
     }
 
     /**

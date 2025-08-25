@@ -12,8 +12,8 @@ android {
         applicationId "br.com.mauker.materialsearchview.app"
         minSdkVersion globalConfiguration["androidMinSdkVersion"]
         targetSdkVersion globalConfiguration["androidTargetSdkVersion"]
-        versionCode 4
-        versionName "1.0"
+        versionCode 6
+        versionName "1.1"
     }
     buildTypes {
         release {
@@ -22,12 +22,21 @@ android {
         }
     }
 
+    buildFeatures {
+        buildConfig true
+    }
+
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = JavaVersion.VERSION_17
     }
 
     useLibrary 'android.test.base'
+    namespace 'br.com.mauker.materialsearchview.app'
 }
 
 dependencies {
@@ -36,7 +45,4 @@ dependencies {
     implementation "androidx.appcompat:appcompat:$appCompatVersion"
     implementation project(':library')
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
-}
-repositories {
-    mavenCentral()
 }

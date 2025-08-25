@@ -11,12 +11,11 @@ android {
     defaultConfig {
         minSdkVersion globalConfiguration["androidMinSdkVersion"]
         targetSdkVersion globalConfiguration["androidTargetSdkVersion"]
-        versionCode 16
-        versionName "1.3.0-rc02"
 
         vectorDrawables.useSupportLibrary = true
 
         buildConfigField "int", "MAX_HISTORY", "10"
+        buildConfigField "int", "MAX_PINNED", "1"
         consumerProguardFiles 'proguard-android.txt'
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
@@ -32,40 +31,60 @@ android {
       abortOnError false
     }
 
+    buildFeatures {
+        buildConfig true
+    }
+
     compileOptions {
-        sourceCompatibility = 1.8
-        targetCompatibility = 1.8
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 
     kotlinOptions {
-        jvmTarget = "1.8"
+        jvmTarget = JavaVersion.VERSION_17
     }
+
+//    kotlinOptions.freeCompilerArgs += [
+//            "-Xuse-experimental=kotlinx.coroutines.ExperimentalCoroutinesApi",
+//            "-Xuse-experimental=kotlinx.coroutines.ObsoleteCoroutinesApi"
+//    ]
 
     useLibrary 'android.test.runner'
     useLibrary 'android.test.base'
     useLibrary 'android.test.mock'
+    namespace 'br.com.mauker.materialsearchview'
 }
 
 dependencies {
     implementation fileTree(dir: 'libs', include: ['*.jar'])
     implementation "androidx.appcompat:appcompat:$appCompatVersion"
+    implementation "androidx.constraintlayout:constraintlayout:$constraintLayoutVersion"
     implementation "com.google.android.material:material:$materialDesignVersion"
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
 
-    androidTestImplementation 'androidx.test:runner:1.3.0'
-    androidTestImplementation 'androidx.test:rules:1.3.0'
+    // Coroutines
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-core:$coroutinesAndroidVersion"
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:$coroutinesAndroidVersion"
+
+    // Room
+    implementation "androidx.room:room-runtime:$roomVersion"
+    implementation "androidx.room:room-ktx:$roomVersion"
+    kapt "androidx.room:room-compiler:$roomVersion"
+
+    androidTestImplementation 'androidx.test:runner:1.5.2'
+    androidTestImplementation 'androidx.test:rules:1.5.0'
     // Assertions
-    androidTestImplementation 'androidx.test.ext:junit:1.1.2'
-    androidTestImplementation 'androidx.test.ext:truth:1.3.0'
-    androidTestImplementation 'com.google.truth:truth:1.0'
+    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
+    androidTestImplementation 'androidx.test.ext:truth:1.5.0'
+    androidTestImplementation 'com.google.truth:truth:1.1.3'
     // Espresso
-    androidTestImplementation 'androidx.test.espresso:espresso-core:3.3.0'
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
 }
 
 ext {
     PUBLISH_GROUP_ID = 'br.com.mauker.materialsearchview'
     PUBLISH_ARTIFACT_ID = 'materialsearchview'
-    PUBLISH_VERSION = '1.3.0-rc02'
+    PUBLISH_VERSION = '2.0.0-beta02'
 }
 
-apply from: 'https://raw.githubusercontent.com/blundell/release-android-library/master/android-release-aar.gradle'
+// apply from: 'https://raw.githubusercontent.com/blundell/release-android-library/master/android-release-aar.gradle'

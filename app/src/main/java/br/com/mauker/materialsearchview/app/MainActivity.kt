@@ -4,7 +4,6 @@ import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.speech.RecognizerIntent
-import android.text.TextUtils
 import android.view.Menu
 import android.view.MenuItem
 import android.widget.Button
@@ -13,11 +12,13 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.Toolbar
 import br.com.mauker.materialsearchview.MaterialSearchView
 import br.com.mauker.materialsearchview.MaterialSearchView.SearchViewListener
+import br.com.mauker.materialsearchview.db.model.History
 
 class MainActivity : AppCompatActivity() {
     private lateinit var searchView: MaterialSearchView
     private lateinit var btClearHistory: Button
     private lateinit var btClearSuggestions: Button
+    private lateinit var btClearPins: Button
     private lateinit var btClearAll: Button
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -30,6 +31,7 @@ class MainActivity : AppCompatActivity() {
         searchView = findViewById(R.id.search_view)
         btClearHistory = findViewById(R.id.bt_clearHistory)
         btClearSuggestions = findViewById(R.id.bt_clearSuggestions)
+        btClearPins = findViewById(R.id.bt_clearPins)
         btClearAll = findViewById(R.id.bt_clearAll)
 
         searchView.setOnQueryTextListener(object : MaterialSearchView.OnQueryTextListener {
@@ -51,25 +53,32 @@ class MainActivity : AppCompatActivity() {
                 // Do something once the view is closed.
             }
         })
-        searchView.setOnItemClickListener { _, _, position, _ -> // Do something when the suggestion list is clicked.
-            val suggestion = searchView.getSuggestionAtPosition(position)
-            searchView.setQuery(suggestion, false)
+
+        val context: Context = this
+
+        val clickListener = object: MaterialSearchView.OnHistoryItemClickListener {
+            override fun onClick(history: History) {
+                searchView.setQuery(history.query, false)
+            }
+
+            override fun onLongClick(history: History) {
+                Toast.makeText(context, "Long clicked! Item: $history", Toast.LENGTH_SHORT).show()
+            }
         }
+
+        searchView.setOnItemClickListener(clickListener)
+
         searchView.setOnClearClickListener {
             Toast.makeText(this, "Clear clicked!", Toast.LENGTH_LONG).show()
         }
-        btClearHistory.setOnClickListener { clearHistory() }
-        btClearSuggestions.setOnClickListener { clearSuggestions() }
-        btClearAll.setOnClickListener { clearAll() }
+        btClearHistory.setOnClickListener { searchView.clearHistory() }
+        btClearSuggestions.setOnClickListener { searchView.clearSuggestions() }
+        btClearPins.setOnClickListener { searchView.clearPinned() }
+        btClearAll.setOnClickListener { searchView.clearAll() }
 
         searchView.adjustTintAlpha(0.8f)
-        val context: Context = this
-        searchView.setOnItemLongClickListener { _, _, i, _ ->
-            Toast.makeText(context, "Long clicked position: $i", Toast.LENGTH_SHORT).show()
-            true
-        }
         // This will override the default audio action.
-        searchView.setOnVoiceClickedListener { Toast.makeText(context, "Voice clicked!", Toast.LENGTH_SHORT).show() }
+        // searchView.setOnVoiceClickedListener { Toast.makeText(context, "Voice clicked!", Toast.LENGTH_SHORT).show() }
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
@@ -92,6 +101,7 @@ class MainActivity : AppCompatActivity() {
         return super.onOptionsItemSelected(item)
     }
 
+    @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         if (searchView.isOpen) {
             // Close the search on the back button press.
@@ -101,12 +111,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         if (requestCode == MaterialSearchView.REQUEST_VOICE && resultCode == RESULT_OK) {
-            val matches = data!!.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+            val matches = data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
             if (matches != null && matches.size > 0) {
                 val searchWrd = matches[0]
-                if (!TextUtils.isEmpty(searchWrd)) {
+                if (searchWrd.isNotBlank()) {
                     searchView.setQuery(searchWrd, false)
                 }
             }
@@ -117,25 +128,19 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
-        searchView.clearSuggestions()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        searchView.onViewStopped()
     }
 
     override fun onResume() {
         super.onResume()
-        searchView.activityResumed()
+        searchView.onViewResumed()
         val arr = resources.getStringArray(R.array.suggestions)
         searchView.addSuggestions(arr)
-    }
-
-    private fun clearHistory() {
-        searchView.clearHistory()
-    }
-
-    private fun clearSuggestions() {
-        searchView.clearSuggestions()
-    }
-
-    private fun clearAll() {
-        searchView.clearAll()
+        searchView.saveQueryToDb("Query")
+        searchView.addPin("Pinned item test")
     }
 }
